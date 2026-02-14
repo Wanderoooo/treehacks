@@ -41,3 +41,35 @@ video:
 performance:
   use_gpu: true              # Use CUDA/MPS if available
   max_workers: 2             # Thread pool for concurrent operations
+
+# Depth Estimation Configuration
+depth_estimation:
+  enabled: true
+  model: "depth-anything/Depth-Anything-V2-Small-hf"
+
+# Speed Estimation Configuration
+speed_estimation:
+  enabled: true
+  pixels_per_meter: 50.0        # Calibration: pixels per real-world meter
+  smoothing_window: 7           # Moving average window (frames)
+  min_displacement: 2.0         # Minimum pixel movement to count as motion
+  max_speed_kmh: 80.0           # Clamp unreasonable speeds
+
+# Trajectory Heatmap Configuration
+# Video Metadata (defaults for recording context)
+video_metadata:
+  location:
+    lat: null
+    lng: null
+    name: ""
+  time_of_day: "auto"
+
+# Trajectory Heatmap Configuration
+heatmap:
+  enabled: true
+  colormap: "COLORMAP_JET"      # OpenCV colormap (COLORMAP_JET, COLORMAP_HOT, etc.)
+  gaussian_blur_kernel: 25      # Blur kernel size (must be odd)
+  overlay_alpha: 0.4            # Heatmap transparency on video (0.0-1.0)
+  point_radius: 5               # Centroid point radius on accumulator
+  save_standalone: true          # Save standalone heatmap image
+  generate_overlay_video: true   # Overlay heatmap on annotated video

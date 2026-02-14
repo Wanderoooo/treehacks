@@ -58,14 +58,8 @@ class VideoAnnotator:
                 label_parts.append(f"{color_data['primary_color']}")
 
             # Add light status
-            light_indicators = []
-            if lights.get('has_front'):
-                light_indicators.append("F")
-            if lights.get('has_rear'):
-                light_indicators.append("R")
-
-            if light_indicators:
-                label_parts.append(f"[{'+'.join(light_indicators)}]")
+            if lights.get('has_front') or lights.get('has_rear'):
+                label_parts.append("[Lights on]")
             else:
                 label_parts.append("[No lights]")
 
@@ -105,6 +99,18 @@ class VideoAnnotator:
                 for lx, ly in lights['rear_coords']:
                     cv2.circle(annotated, (lx, ly), 6, (0, 0, 255), 2)
                     cv2.circle(annotated, (lx, ly), 2, (0, 0, 255), -1)
+
+            # Draw speed indicator bar below bbox
+            speed_kmh = bike_data.get('speed_kmh')
+            if speed_kmh is not None and speed_kmh > 0:
+                bar_width = int(min(speed_kmh / 40.0, 1.0) * (x2 - x1))
+                if speed_kmh < 15:
+                    bar_color = (0, 255, 0)      # Green (slow)
+                elif speed_kmh < 30:
+                    bar_color = (0, 255, 255)    # Yellow (medium)
+                else:
+                    bar_color = (0, 0, 255)      # Red (fast)
+                cv2.rectangle(annotated, (x1, y2 + 2), (x1 + bar_width, y2 + 6), bar_color, -1)
 
         return annotated
 

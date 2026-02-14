@@ -3,7 +3,22 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:zbigatron.com)"
+      "WebFetch(domain:zbigatron.com)",
+      "WebFetch(domain:docs.ollama.com)",
+      "WebFetch(domain:ollama.com)",
+      "Bash(pip3 show:*)",
+      "Bash(ollama rm:*)",
+      "Bash(ollama pull:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(kill:*)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(ffprobe:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)"
     ]
   }
 }

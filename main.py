@@ -68,6 +68,24 @@ Examples:
         help="Skip annotated video generation (faster, JSON only)"
     )
 
+    parser.add_argument(
+        "--lat", type=float,
+        help="GPS latitude of recording location"
+    )
+    parser.add_argument(
+        "--lng", type=float,
+        help="GPS longitude of recording location"
+    )
+    parser.add_argument(
+        "--location-name", type=str,
+        help="Human-readable location name"
+    )
+    parser.add_argument(
+        "--time-of-day",
+        choices=["auto", "night", "day", "dusk", "dawn"],
+        help="Override time-of-day classification"
+    )
+
     args = parser.parse_args()
 
     # Validate input
@@ -100,6 +118,18 @@ Examples:
         if args.model:
             print(f"Override: model = {args.model}.pt")
             # Note: Would need to reload detector with new model
+
+        # Apply metadata overrides
+        if args.lat is not None and args.lng is not None:
+            processor.config.setdefault('video_metadata', {}).setdefault('location', {})
+            processor.config['video_metadata']['location']['lat'] = args.lat
+            processor.config['video_metadata']['location']['lng'] = args.lng
+        if args.location_name:
+            processor.config.setdefault('video_metadata', {}).setdefault('location', {})
+            processor.config['video_metadata']['location']['name'] = args.location_name
+        if args.time_of_day:
+            processor.config.setdefault('video_metadata', {})
+            processor.config['video_metadata']['time_of_day'] = args.time_of_day
 
         # Process video
         results = processor.process_video(args.input_video, args.output_dir)

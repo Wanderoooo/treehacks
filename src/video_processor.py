@@ -4,6 +4,7 @@ import cv2
 import os
 import yaml
 import time
+import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from collections import defaultdict
@@ -14,6 +15,9 @@ from .color_analyzer import ColorAnalyzer
 from .utils import SimpleTracker
 from .annotator import VideoAnnotator
 from .report_generator import ReportGenerator
+from .depth_estimator import DepthEstimator
+from .speed_estimator import SpeedEstimator
+from .heatmap_generator import HeatmapGenerator
 
 
 class VideoProcessor:
@@ -43,6 +47,14 @@ class VideoProcessor:
         self.tracker = SimpleTracker(iou_threshold=0.3)
         self.annotator = VideoAnnotator(self.config)
         self.report_generator = ReportGenerator()
+
+        # Depth estimator (model loads once, no video-specific params)
+        depth_config = self.config.get('depth_estimation', {'enabled': False})
+        self.depth_estimator = DepthEstimator(depth_config) if depth_config.get('enabled', False) else None
+
+        # Speed/heatmap configs stored for instantiation in process_video() (need fps/resolution)
+        self.speed_config = self.config.get('speed_estimation', {'enabled': False})
+        self.heatmap_config = self.config.get('heatmap', {'enabled': False})
 
         print("Video processor initialized with all components")
 
@@ -90,14 +102,30 @@ class VideoProcessor:
         # Prepare output video
         input_filename = Path(input_path).stem
         output_video_path = video_out_dir / f"{input_filename}_annotated.mp4"
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
         out_fps = fps if self.config['video']['output_fps'] == -1 else self.config['video']['output_fps']
         out = cv2.VideoWriter(str(output_video_path), fourcc, out_fps, (frame_width, frame_height))
+
+        # Prepare depth video writer
+        depth_video_path = None
+        depth_out = None
+        depth_config = self.config.get('depth_estimation', {})
+        if self.depth_estimator and self.depth_estimator.enabled:
+            depth_out_dir = output_dir / "depth"
+            depth_out_dir.mkdir(parents=True, exist_ok=True)
+            depth_video_path = depth_out_dir / f"{input_filename}_depth.mp4"
+            depth_out = cv2.VideoWriter(str(depth_video_path), fourcc, out_fps, (frame_width, frame_height))
+
+        # Initialize runtime components (need video properties)
+        speed_estimator = SpeedEstimator(self.speed_config, fps) if self.speed_config.get('enabled', False) else None
+        heatmap_generator = HeatmapGenerator(self.heatmap_config, frame_width, frame_height) if self.heatmap_config.get('enabled', False) else None
 
         # Track data across frames
         track_crops = defaultdict(dict)  # track_id -> {frame_idx: crop}
         track_lights = defaultdict(list)  # track_id -> [light_results]
+        track_depths = defaultdict(list)  # track_id -> [depth_info_dicts]
         track_info = {}  # track_id -> metadata
+        reference_frame = None
 
         frame_idx = 0
         processed_frames = 0
@@ -123,6 +151,24 @@ class VideoProcessor:
                     # Update tracker
                     track_ids = self.tracker.update(bikes, frame_idx)
 
+                    # Run depth estimation once per frame
+                    depth_map = None
+                    if self.depth_estimator and self.depth_estimator.enabled:
+                        depth_map = self.depth_estimator.estimate_depth(frame)
+                        if depth_map is not None:
+                            depth_colored = self.depth_estimator.render_depth_colormap(depth_map)
+                            if depth_out is not None:
+                                depth_out.write(depth_colored)
+                            # Save first depth frame as standalone image
+                            if processed_frames == 0:
+                                depth_img_path = output_dir / "depth" / f"{input_filename}_depth.png"
+                                cv2.imwrite(str(depth_img_path), depth_colored)
+                                print(f"Depth image saved to: {depth_img_path}")
+
+                    # Capture first frame for heatmap background
+                    if reference_frame is None:
+                        reference_frame = frame.copy()
+
                     # Process each bike
                     bikes_with_data = []
                     for (x1, y1, x2, y2, conf), track_id in zip(bikes, track_ids):
@@ -143,6 +189,23 @@ class VideoProcessor:
                         if frame_idx % sample_frequency == 0 and bike_crop.size > 0:
                             track_crops[track_id][frame_idx] = bike_crop.copy()
 
+                        # Depth estimation for this bike
+                        depth_info = None
+                        if depth_map is not None and self.depth_estimator:
+                            depth_info = self.depth_estimator.get_depth_for_bbox(depth_map, (x1, y1, x2, y2))
+                            track_depths[track_id].append(depth_info)
+
+                        # Speed estimation
+                        speed_kmh = None
+                        if speed_estimator:
+                            speed_kmh = speed_estimator.update(track_id, (x1, y1, x2, y2), frame_idx)
+
+                        # Heatmap accumulation
+                        if heatmap_generator:
+                            cx = (x1 + x2) // 2
+                            cy = (y1 + y2) // 2
+                            heatmap_generator.add_centroid(cx, cy)
+
                         bikes_with_data.append({
                             'bbox': (x1, y1, x2, y2, conf),
                             'track_id': track_id,
@@ -151,7 +214,9 @@ class VideoProcessor:
                                 'has_rear': light_result['has_rear_light'],
                                 'front_coords': front_lights_frame,
                                 'rear_coords': rear_lights_frame
-                            }
+                            },
+                            'depth': depth_info,
+                            'speed_kmh': speed_kmh,
                         })
 
                     # Store detection data
@@ -176,6 +241,20 @@ class VideoProcessor:
         # Cleanup video
         cap.release()
         out.release()
+        if depth_out is not None:
+            depth_out.release()
+            print(f"Depth video saved to: {depth_video_path}")
+
+        # Save heatmap outputs
+        heatmap_out_dir = output_dir / "heatmaps"
+        if heatmap_generator and heatmap_generator.enabled:
+            heatmap_out_dir.mkdir(parents=True, exist_ok=True)
+            if heatmap_generator.save_standalone:
+                heatmap_generator.save_heatmap_image(str(heatmap_out_dir / f"{input_filename}_heatmap.png"))
+            if reference_frame is not None:
+                heatmap_generator.save_heatmap_with_background(
+                    reference_frame, str(heatmap_out_dir / f"{input_filename}_heatmap_overlay.png")
+                )
 
         # Post-processing: Color analysis per track
         print("\nAnalyzing bike colors...")
@@ -228,6 +307,19 @@ class VideoProcessor:
             if track_id in track_colors:
                 track_info[track_id]['color'] = track_colors[track_id]
 
+            # Add depth data
+            if track_id in track_depths and track_depths[track_id]:
+                depth_samples = track_depths[track_id]
+                avg_depth = np.mean([d['centroid_depth'] for d in depth_samples])
+                track_info[track_id]['depth'] = {
+                    'avg_centroid_depth': round(float(avg_depth), 4),
+                    'samples': len(depth_samples)
+                }
+
+            # Add speed data
+            if speed_estimator:
+                track_info[track_id]['speed'] = speed_estimator.get_track_speed_summary(track_id)
+
         # Generate JSON report
         processing_time = time.time() - start_time
         output_report_path = report_out_dir / f"{input_filename}_report.json"
@@ -242,11 +334,29 @@ class VideoProcessor:
             'processing_time': round(processing_time, 2)
         }
 
+        # Build video metadata (location, time of day)
+        metadata_config = self.config.get('video_metadata', {})
+        time_of_day = metadata_config.get('time_of_day', 'auto')
+        if time_of_day == 'auto' and reference_frame is not None:
+            avg_brightness = np.mean(cv2.cvtColor(reference_frame, cv2.COLOR_BGR2GRAY))
+            if avg_brightness < 80:
+                time_of_day = 'night'
+            elif avg_brightness < 160:
+                time_of_day = 'dusk/dawn'
+            else:
+                time_of_day = 'day'
+        video_metadata = {
+            'location': metadata_config.get('location', {}),
+            'time_of_day': time_of_day,
+            'recording_timestamp': metadata_config.get('recording_timestamp')
+        }
+
         report = self.report_generator.generate_report(
             video_info=video_info,
             all_detections=all_detections,
             track_data=track_info,
-            output_path=str(output_report_path)
+            output_path=str(output_report_path),
+            video_metadata=video_metadata
         )
 
         # Print summary
@@ -263,6 +373,12 @@ class VideoProcessor:
         print(f"\nOutputs:")
         print(f"  Annotated video: {output_video_path}")
         print(f"  JSON report: {output_report_path}")
+        if heatmap_generator and heatmap_generator.enabled:
+            print(f"  Heatmap outputs: {heatmap_out_dir}")
+        if speed_estimator:
+            print(f"  Speed estimation: enabled")
+        if depth_video_path:
+            print(f"  Depth video: {depth_video_path}")
         print(f"{'='*60}\n")
 
         return {

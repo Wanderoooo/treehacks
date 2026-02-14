@@ -9,6 +9,15 @@ pillow>=10.0.0
 # VLM Integration
 ollama>=0.1.0
 
+# Depth Estimation
+transformers>=4.35.0
+
+# Web Dashboard
+flask>=3.0.0
+
+# Agent UI
+gradio>=4.0.0
+
 # Data Processing & Output
 pyyaml>=6.0
 tqdm>=4.65.0

@@ -1,6 +1,7 @@
 """JSON report generation."""
 
 import json
+import numpy as np
 from typing import Dict, List
 from pathlib import Path
 from collections import defaultdict
@@ -19,7 +20,8 @@ class ReportGenerator:
         video_info: Dict,
         all_detections: List[Dict],
         track_data: Dict[int, Dict],
-        output_path: str
+        output_path: str,
+        video_metadata: Dict = None
     ):
         """
         Generate and save JSON report.
@@ -29,6 +31,7 @@ class ReportGenerator:
             all_detections: Frame-by-frame detection results
             track_data: Per-track aggregated data
             output_path: Path to save JSON report
+            video_metadata: Optional location/time metadata
         """
         # Build report structure
         report = {
@@ -37,6 +40,7 @@ class ReportGenerator:
                 'timestamp_utc': datetime.utcnow().isoformat() + 'Z',
                 'report_version': '1.0'
             },
+            'video_metadata': video_metadata or {},
             'video_info': video_info,
             'summary': self._generate_summary(track_data),
             'violations': self._generate_violations(track_data, video_info),
@@ -68,7 +72,12 @@ class ReportGenerator:
         bikes_missing_rear = sum(1 for t in track_data.values()
                                 if not t.get('lights', {}).get('has_rear_light', False))
 
-        return {
+        # Speed statistics
+        bikes_with_speed = [t for t in track_data.values()
+                           if t.get('speed', {}).get('speed_samples', 0) > 0]
+        avg_speeds = [t['speed']['avg_speed_kmh'] for t in bikes_with_speed]
+
+        summary = {
             'total_bikes_detected': total_bikes,
             'bikes_with_front_lights': bikes_with_front,
             'bikes_with_rear_lights': bikes_with_rear,
@@ -78,6 +87,12 @@ class ReportGenerator:
             'bikes_missing_rear_light': bikes_missing_rear,
             'compliance_rate': round((bikes_with_both / max(total_bikes, 1)) * 100, 2)
         }
+
+        if avg_speeds:
+            summary['avg_speed_all_bikes_kmh'] = round(float(np.mean(avg_speeds)), 1)
+            summary['max_speed_any_bike_kmh'] = round(float(max(t['speed']['max_speed_kmh'] for t in bikes_with_speed)), 1)
+
+        return summary
 
     def _generate_violations(self, track_data: Dict[int, Dict], video_info: Dict) -> List[Dict]:
         """Generate list of bikes with lighting violations for ticketing."""
@@ -134,6 +149,14 @@ class ReportGenerator:
                     }
                 }
 
+                # Add speed info if available
+                speed_data = data.get('speed', {})
+                if speed_data and speed_data.get('speed_samples', 0) > 0:
+                    violation['speed'] = {
+                        'avg_speed_kmh': speed_data['avg_speed_kmh'],
+                        'max_speed_kmh': speed_data['max_speed_kmh']
+                    }
+
                 violations.append(violation)
 
         return violations
@@ -181,6 +204,24 @@ class ReportGenerator:
                     'front_light_detection_rate': round(lights_data.get('front_detection_rate', 0.0), 2),
                     'rear_light_detection_rate': round(lights_data.get('rear_detection_rate', 0.0), 2),
                     'compliance_status': 'COMPLIANT' if (has_front and has_rear) else 'NON_COMPLIANT'
+                }
+
+            # Speed information
+            speed_data = data.get('speed', {})
+            if speed_data and speed_data.get('speed_samples', 0) > 0:
+                bike_info['speed'] = {
+                    'avg_speed_kmh': speed_data['avg_speed_kmh'],
+                    'max_speed_kmh': speed_data['max_speed_kmh'],
+                    'min_speed_kmh': speed_data['min_speed_kmh'],
+                    'speed_samples': speed_data['speed_samples']
+                }
+
+            # Depth information
+            depth_data = data.get('depth', {})
+            if depth_data:
+                bike_info['depth'] = {
+                    'avg_relative_depth': depth_data.get('avg_centroid_depth', 0.0),
+                    'depth_samples': depth_data.get('samples', 0)
                 }
 
             bikes.append(bike_info)
