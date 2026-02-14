@@ -1,0 +1,46 @@
+{
+  "video_info": {
+    "filename": "nolight.mp4",
+    "duration_seconds": 3.76,
+    "fps": 25,
+    "resolution": [
+      768,
+      432
+    ],
+    "total_frames": 94,
+    "processed_frames": 19,
+    "processing_time": 1.09
+  },
+  "summary": {
+    "total_bikes_detected": 1,
+    "bikes_with_front_lights": 0,
+    "bikes_with_rear_lights": 0,
+    "bikes_with_both_lights": 0
+  },
+  "bikes": [
+    {
+      "track_id": 1,
+      "first_seen_frame": 0,
+      "last_seen_frame": 18,
+      "total_appearances": 19,
+      "color": {
+        "primary_color": "unknown",
+        "confidence": 0.0,
+        "sample_responses": [],
+        "frames_analyzed": []
+      },
+      "lights": {
+        "has_front_light": false,
+        "has_rear_light": false,
+        "front_light_detection_rate": 0.0,
+        "rear_light_detection_rate": 0.0
+      }
+    }
+  ],
+  "processing_stats": {
+    "total_processing_time_seconds": 1.09,
+    "processed_frames": 19,
+    "total_detections": 19,
+    "average_detections_per_frame": 1.0
+  }
+}

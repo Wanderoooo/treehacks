@@ -1,0 +1,43 @@
+# YOLO Configuration
+yolo:
+  model: "yolo11n.pt"
+  confidence: 0.4
+  iou_threshold: 0.5
+  bike_class_id: 1  # COCO class ID for bicycle
+
+# Light Detection Configuration
+light_detection:
+  brightness_threshold: 200  # Pixel value threshold (0-255)
+  min_light_area: 20        # Minimum pixels for a valid light
+  max_light_area: 2000      # Maximum pixels (filters out large reflections)
+  roi_zones:
+    front:
+      x_range: [0.6, 1.0]   # Front 40% of bike
+      y_range: [0.2, 0.8]   # Middle vertical region
+    rear:
+      x_range: [0.0, 0.4]   # Rear 40% of bike
+      y_range: [0.2, 0.8]
+  aspect_ratio_range: [0.3, 3.0]  # Filter non-light shapes
+  circularity_threshold: 0.3      # Prefer circular/compact shapes
+
+# Color Analysis Configuration
+color_analysis:
+  ollama_model: "llava:latest"
+  prompt: "Describe only the primary color of the bicycle in 2-3 words maximum. Be specific (e.g., 'dark blue', 'red', 'silver'). Answer:"
+  sample_frequency: 30       # Analyze every Nth frame (not every frame)
+  consensus_window: 3        # Use majority vote from N samples
+  temperature: 0.2           # Lower = more consistent
+  timeout: 10                # Seconds per request
+
+# Video Processing
+video:
+  frame_skip: 1              # Process every Nth frame (1 = all frames)
+  max_frames: -1             # -1 = process entire video
+  output_fps: -1             # -1 = use input FPS
+  annotation_thickness: 2
+  annotation_font_scale: 0.6
+
+# Performance
+performance:
+  use_gpu: true              # Use CUDA/MPS if available
+  max_workers: 2             # Thread pool for concurrent operations

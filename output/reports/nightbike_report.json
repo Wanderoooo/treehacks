@@ -1,0 +1,46 @@
+{
+  "video_info": {
+    "filename": "nightbike.mp4",
+    "duration_seconds": 1.0869565217391304,
+    "fps": 23,
+    "resolution": [
+      768,
+      432
+    ],
+    "total_frames": 25,
+    "processed_frames": 10,
+    "processing_time": 0.9
+  },
+  "summary": {
+    "total_bikes_detected": 1,
+    "bikes_with_front_lights": 1,
+    "bikes_with_rear_lights": 1,
+    "bikes_with_both_lights": 1
+  },
+  "bikes": [
+    {
+      "track_id": 1,
+      "first_seen_frame": 0,
+      "last_seen_frame": 9,
+      "total_appearances": 9,
+      "color": {
+        "primary_color": "unknown",
+        "confidence": 0.0,
+        "sample_responses": [],
+        "frames_analyzed": []
+      },
+      "lights": {
+        "has_front_light": true,
+        "has_rear_light": true,
+        "front_light_detection_rate": 1.0,
+        "rear_light_detection_rate": 0.56
+      }
+    }
+  ],
+  "processing_stats": {
+    "total_processing_time_seconds": 0.9,
+    "processed_frames": 10,
+    "total_detections": 9,
+    "average_detections_per_frame": 0.9
+  }
+}
