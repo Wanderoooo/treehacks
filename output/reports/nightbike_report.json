@@ -1,17 +1,17 @@
 {
   "report_metadata": {
-    "generated_at": "2026-02-14T06:31:51.793992",
-    "timestamp_utc": "2026-02-14T14:31:51.793995Z",
+    "generated_at": "2026-02-14T09:57:21.870769",
+    "timestamp_utc": "2026-02-14T17:57:21.870773Z",
     "report_version": "1.0"
   },
   "video_metadata": {
     "location": {
       "lat": 37.4275,
       "lng": -122.1697,
-      "name": "Stanford University, CA"
+      "name": "Palm Drive, Stanford, CA"
     },
-    "time_of_day": "night",
-    "recording_timestamp": "2026-02-14T02:15:00"
+    "time_of_day": "dusk/dawn",
+    "recording_timestamp": null
   },
   "video_info": {
     "filename": "nightbike.mp4",
@@ -23,7 +23,7 @@
     ],
     "total_frames": 25,
     "processed_frames": 10,
-    "processing_time": 2.97
+    "processing_time": 3.03
   },
   "summary": {
     "total_bikes_detected": 1,
@@ -74,7 +74,7 @@
     }
   ],
   "processing_stats": {
-    "total_processing_time_seconds": 2.97,
+    "total_processing_time_seconds": 3.03,
     "processed_frames": 10,
     "total_detections": 9,
     "average_detections_per_frame": 0.9

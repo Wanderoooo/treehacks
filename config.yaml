@@ -59,9 +59,9 @@ speed_estimation:
 # Video Metadata (defaults for recording context)
 video_metadata:
   location:
-    lat: null
-    lng: null
-    name: ""
+    lat: 37.4275
+    lng: -122.1697
+    name: "Palm Drive, Stanford, CA"
   time_of_day: "auto"
 
 # Trajectory Heatmap Configuration

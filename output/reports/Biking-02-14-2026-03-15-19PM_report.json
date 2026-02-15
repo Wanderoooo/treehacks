@@ -1,0 +1,51 @@
+{
+  "report_metadata": {
+    "generated_at": "2026-02-14T15:15:23.571334",
+    "report_version": "1.0",
+    "source": "jetson_nanoowl"
+  },
+  "video_metadata": {
+    "time_of_day": "auto"
+  },
+  "video_info": {
+    "filename": "Biking-02-14-2026-03-15-19PM.avi",
+    "fps": 30,
+    "resolution": [
+      640,
+      480
+    ],
+    "total_frames": 65,
+    "processed_frames": 65,
+    "duration_seconds": 2.17
+  },
+  "summary": {
+    "total_bikes_detected": 1,
+    "bikes_with_front_lights": 0,
+    "bikes_with_rear_lights": 0,
+    "bikes_with_both_lights": 0,
+    "bikes_with_no_lights": 1,
+    "compliance_rate": 0.0
+  },
+  "violations": [],
+  "bikes": [
+    {
+      "track_id": 2,
+      "first_seen_frame": 12,
+      "last_seen_frame": 34,
+      "first_seen_timestamp_seconds": 0.4,
+      "last_seen_timestamp_seconds": 1.13,
+      "duration_seconds": 0.77,
+      "total_appearances": 23,
+      "lights": {
+        "has_front_light": false,
+        "has_rear_light": false,
+        "has_both_lights": false,
+        "compliance_status": "UNKNOWN"
+      }
+    }
+  ],
+  "processing_stats": {
+    "processed_frames": 65,
+    "total_detections": 23
+  }
+}

@@ -1,6 +1,7 @@
 """Main video processing pipeline."""
 
 import cv2
+import json
 import os
 import yaml
 import time
@@ -358,6 +359,75 @@ class VideoProcessor:
             output_path=str(output_report_path),
             video_metadata=video_metadata
         )
+
+        # Generate one-sentence visual description using LLaVA
+        try:
+            import ollama
+            import tempfile
+            # Grab a frame from the middle of the video
+            cap_desc = cv2.VideoCapture(input_path)
+            mid_frame_idx = int(total_frames // 2)
+            cap_desc.set(cv2.CAP_PROP_POS_FRAMES, mid_frame_idx)
+            ret_desc, mid_frame = cap_desc.read()
+            cap_desc.release()
+
+            if ret_desc and mid_frame is not None:
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                    tmp_path = tmp.name
+                    cv2.imwrite(tmp_path, mid_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                try:
+                    vlm_model = self.config.get('color_analysis', {}).get('ollama_model', 'llava:latest')
+                    desc_response = ollama.generate(
+                        model=vlm_model,
+                        prompt=(
+                            "Describe this cycling/street footage in exactly ONE sentence. "
+                            "Mention the setting, lighting conditions, and any visible cyclists or bikes. "
+                            "Reply with ONLY the sentence."
+                        ),
+                        images=[tmp_path],
+                        stream=False,
+                        options={'temperature': 0.3, 'num_predict': 80}
+                    )
+                    description = desc_response['response'].strip().split('\n')[0]
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+            else:
+                description = ""
+        except Exception:
+            description = ""
+
+        if description:
+            report['description'] = description
+
+        # Save violation snapshot crops
+        violations_dir = output_dir / "violations"
+        violation_track_ids = {v['track_id'] for v in report.get('violations', [])}
+        if violation_track_ids:
+            violations_dir.mkdir(parents=True, exist_ok=True)
+            for track_id in violation_track_ids:
+                crops = track_crops.get(track_id, {})
+                if not crops:
+                    continue
+                # Pick the largest crop (best view of the bike)
+                best_frame = max(crops, key=lambda f: crops[f].shape[0] * crops[f].shape[1])
+                crop = crops[best_frame]
+                snap_path = violations_dir / f"{input_filename}_bike{track_id}.jpg"
+                cv2.imwrite(str(snap_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            print(f"Violation snapshots saved to: {violations_dir}")
+
+            # Add snapshot paths to report violations
+            for v in report['violations']:
+                tid = v['track_id']
+                snap = violations_dir / f"{input_filename}_bike{tid}.jpg"
+                if snap.exists():
+                    v['snapshot'] = str(snap)
+
+        # Save updated report
+        with open(str(output_report_path), 'w') as f:
+            json.dump(report, f, indent=2)
 
         # Print summary
         print(f"\n{'='*60}")

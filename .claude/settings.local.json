@@ -18,7 +18,11 @@
       "Bash(lsof:*)",
       "Bash(ffprobe:*)",
       "Bash(brew list:*)",
-      "Bash(brew install:*)"
+      "Bash(brew install:*)",
+      "WebFetch(domain:developer.ridgerun.com)",
+      "WebFetch(domain:blog.roboflow.com)",
+      "Bash(scp:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

@@ -1,6 +1,119 @@
 document.addEventListener("DOMContentLoaded", () => {
     fetchReports();
+    initIncidentHeatmap();
+    initLiveFeedTimestamp();
+    initChat();
+    // Auto-refresh reports every 10 seconds for live Jetson uploads
+    setInterval(fetchReports, 10000);
 });
+
+function initLiveFeedTimestamp() {
+    const el = document.getElementById("feed-timestamp");
+    if (!el) return;
+    function update() {
+        const now = new Date();
+        const ts = now.toLocaleString("en-US", {
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+            hour12: false
+        });
+        el.textContent = "REC " + ts;
+    }
+    update();
+    setInterval(update, 1000);
+}
+
+function initIncidentHeatmap() {
+    const el = document.getElementById("incident-heatmap-global");
+    if (!el) return;
+
+    const map = L.map("incident-heatmap-global", { zoomControl: true }).setView([37.4275, -122.1697], 15);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OSM",
+        maxZoom: 18
+    }).addTo(map);
+
+    // Fake incident hotspot data around Stanford campus
+    const incidentPoints = [
+        // Palm Drive cluster (heaviest — main hotspot)
+        [37.4275, -122.1697, 1.0],
+        [37.4274, -122.1699, 0.95],
+        [37.4276, -122.1695, 0.9],
+        [37.4273, -122.1701, 0.85],
+        [37.4277, -122.1693, 0.8],
+        [37.4272, -122.1698, 0.9],
+        [37.4278, -122.1696, 0.85],
+        [37.4271, -122.1700, 0.75],
+        [37.4279, -122.1694, 0.7],
+        [37.4275, -122.1700, 0.8],
+        [37.4274, -122.1694, 0.75],
+        [37.4276, -122.1701, 0.7],
+        // The Oval
+        [37.4260, -122.1720, 0.7],
+        [37.4258, -122.1718, 0.65],
+        [37.4262, -122.1722, 0.6],
+        [37.4256, -122.1716, 0.55],
+        [37.4264, -122.1724, 0.5],
+        [37.4259, -122.1721, 0.6],
+        [37.4261, -122.1717, 0.55],
+        [37.4257, -122.1723, 0.5],
+        // Campus Drive East
+        [37.4285, -122.1675, 0.6],
+        [37.4283, -122.1678, 0.55],
+        [37.4287, -122.1672, 0.5],
+        [37.4281, -122.1681, 0.45],
+        [37.4289, -122.1669, 0.4],
+        [37.4284, -122.1676, 0.5],
+        [37.4286, -122.1673, 0.45],
+        // Serra Mall / Quad area
+        [37.4250, -122.1740, 0.55],
+        [37.4248, -122.1738, 0.5],
+        [37.4252, -122.1742, 0.45],
+        [37.4246, -122.1736, 0.4],
+        [37.4254, -122.1744, 0.35],
+        [37.4249, -122.1741, 0.45],
+        [37.4251, -122.1737, 0.4],
+        // Escondido / Stern area
+        [37.4240, -122.1710, 0.45],
+        [37.4238, -122.1712, 0.4],
+        [37.4242, -122.1708, 0.35],
+        [37.4236, -122.1714, 0.3],
+        [37.4239, -122.1709, 0.35],
+        // Galvez St / Stadium area
+        [37.4345, -122.1612, 0.4],
+        [37.4343, -122.1615, 0.35],
+        [37.4347, -122.1609, 0.3],
+        [37.4341, -122.1618, 0.25],
+        // Lomita Mall
+        [37.4270, -122.1680, 0.5],
+        [37.4268, -122.1682, 0.45],
+        [37.4272, -122.1678, 0.4],
+        [37.4266, -122.1684, 0.35],
+        [37.4269, -122.1679, 0.4],
+        // Lagunita / El Camino edge
+        [37.4295, -122.1655, 0.35],
+        [37.4293, -122.1658, 0.3],
+        [37.4297, -122.1652, 0.25],
+        // Junipero Serra Blvd
+        [37.4230, -122.1750, 0.4],
+        [37.4228, -122.1752, 0.35],
+        [37.4232, -122.1748, 0.3],
+        [37.4226, -122.1754, 0.25],
+        [37.4229, -122.1751, 0.3],
+    ];
+
+    L.heatLayer(incidentPoints, {
+        radius: 35,
+        blur: 20,
+        maxZoom: 17,
+        max: 1.0,
+        minOpacity: 0.4,
+        gradient: {0.2: "#ffffb2", 0.4: "#fecc5c", 0.6: "#fd8d3c", 0.8: "#f03b20", 1.0: "#bd0026"}
+    }).addTo(map);
+
+    L.marker([37.4275, -122.1697]).addTo(map)
+        .bindPopup("Palm Drive, Stanford, CA");
+}
 
 async function fetchReports() {
     try {
@@ -266,7 +379,7 @@ function renderVideoPair(files) {
 }
 
 function renderMapAndHeatmap(location, files) {
-    let mapHtml, heatmapHtml;
+    let mapHtml;
 
     if (location && location.lat && location.lng) {
         const bbox = `${location.lng - 0.005},${location.lat - 0.003},${location.lng + 0.005},${location.lat + 0.003}`;
@@ -285,27 +398,7 @@ function renderMapAndHeatmap(location, files) {
         </div>`;
     }
 
-    if (files?.heatmap_overlay) {
-        heatmapHtml = `
-        <div class="heatmap-container">
-            <label>Trajectory Heatmap</label>
-            <img src="${files.heatmap_overlay}" alt="Trajectory Heatmap" class="heatmap-img" loading="lazy">
-        </div>`;
-    } else if (files?.heatmap) {
-        heatmapHtml = `
-        <div class="heatmap-container">
-            <label>Trajectory Heatmap</label>
-            <img src="${files.heatmap}" alt="Trajectory Heatmap" class="heatmap-img" loading="lazy">
-        </div>`;
-    } else {
-        heatmapHtml = `
-        <div class="heatmap-container">
-            <label>Trajectory Heatmap</label>
-            <div class="no-data-box">Heatmap not available</div>
-        </div>`;
-    }
-
-    return `<div class="map-heatmap-row">${mapHtml}${heatmapHtml}</div>`;
+    return `<div class="map-heatmap-row">${mapHtml}<div></div></div>`;
 }
 
 /* === Utilities === */
@@ -316,4 +409,58 @@ function capitalizeFirst(str) {
 
 function formatVideoName(stem) {
     return stem.replace(/[_-]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/* === Chat === */
+function initChat() {
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("chat-input");
+    const messages = document.getElementById("chat-messages");
+    if (!form) return;
+
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text) return;
+
+        // Add user message
+        appendChatMsg("user", text);
+        input.value = "";
+        input.disabled = true;
+        document.getElementById("chat-send").disabled = true;
+
+        // Show typing indicator
+        const typingEl = appendChatMsg("bot", "", true);
+
+        try {
+            const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({message: text})
+            });
+            const data = await res.json();
+            typingEl.remove();
+            appendChatMsg("bot", data.reply || "(no response)");
+        } catch (err) {
+            typingEl.remove();
+            appendChatMsg("bot", "Connection error. Is the server running?");
+        }
+
+        input.disabled = false;
+        document.getElementById("chat-send").disabled = false;
+        input.focus();
+    });
+}
+
+function appendChatMsg(role, text, typing = false) {
+    const messages = document.getElementById("chat-messages");
+    const wrapper = document.createElement("div");
+    wrapper.className = `chat-msg ${role}${typing ? " chat-typing" : ""}`;
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
+    messages.appendChild(wrapper);
+    messages.scrollTop = messages.scrollHeight;
+    return wrapper;
 }

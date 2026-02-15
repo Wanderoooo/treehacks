@@ -1,0 +1,46 @@
+{
+  "report_metadata": {
+    "generated_at": "2026-02-14T14:54:55.665111",
+    "timestamp_utc": "2026-02-14T22:54:55.665126Z",
+    "report_version": "1.0"
+  },
+  "video_metadata": {
+    "location": {
+      "lat": 37.4275,
+      "lng": -122.1697,
+      "name": "Palm Drive, Stanford, CA"
+    },
+    "time_of_day": "dusk/dawn",
+    "recording_timestamp": null
+  },
+  "video_info": {
+    "filename": "clip_20260214_145332.avi",
+    "duration_seconds": 2.1666666666666665,
+    "fps": 30,
+    "resolution": [
+      640,
+      480
+    ],
+    "total_frames": 65,
+    "processed_frames": 65,
+    "processing_time": 79.32
+  },
+  "summary": {
+    "total_bikes_detected": 0,
+    "bikes_with_front_lights": 0,
+    "bikes_with_rear_lights": 0,
+    "bikes_with_both_lights": 0,
+    "bikes_with_no_lights": 0,
+    "bikes_missing_front_light": 0,
+    "bikes_missing_rear_light": 0,
+    "compliance_rate": 0.0
+  },
+  "violations": [],
+  "bikes": [],
+  "processing_stats": {
+    "total_processing_time_seconds": 79.32,
+    "processed_frames": 65,
+    "total_detections": 0,
+    "average_detections_per_frame": 0.0
+  }
+}

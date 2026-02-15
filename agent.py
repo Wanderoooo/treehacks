@@ -21,7 +21,7 @@ from src.video_processor import VideoProcessor
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL = "nemotron-3-nano"
+MODEL = "llama3.1:8b"
 REPORTS_DIR = Path("output/reports")
 OUTPUT_DIR = Path("output")
 CONFIG_PATH = "config.yaml"
@@ -29,19 +29,34 @@ CONFIG_PATH = "config.yaml"
 SYSTEM_PROMPT = {
     "role": "system",
     "content": (
-        "You are a bike safety analysis agent. You help users analyze cycling "
-        "videos for safety compliance — detecting bikes, checking for lights, "
-        "measuring speed, and estimating depth.\n\n"
-        "You have tools to:\n"
-        "- Process new videos through the detection pipeline\n"
-        "- Query reports from previously processed videos\n"
-        "- Look up specific bike details, violations, and statistics\n\n"
-        "Always use your tools to answer questions about videos. When a user "
-        "asks about a video, first check if it has been processed using "
-        "list_processed_videos. If not, offer to process it. Be concise and "
-        "cite specific data from the tools."
+        "You are a bike safety analysis agent. You answer questions about "
+        "cycling videos that have been analyzed for safety compliance.\n\n"
+        "RULES:\n"
+        "1. ALWAYS call list_processed_videos() first to see which videos exist.\n"
+        "2. The video_name parameter must be an EXACT name returned by "
+        "list_processed_videos (like 'nightbike' or 'nolight'). NEVER guess names.\n"
+        "3. Use the right tool to answer the question, then respond in plain English.\n"
+        "4. If asked about 'all' or 'worst', query each video and compare."
     ),
 }
+
+
+def _build_seed_messages() -> list:
+    """Seed the conversation with an initial list_processed_videos call.
+
+    This teaches the model the correct workflow by example and gives it
+    the actual video names upfront.
+    """
+    video_list = list_processed_videos()
+    return [
+        SYSTEM_PROMPT,
+        {"role": "user", "content": "What videos are available?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "list_processed_videos", "arguments": {}}}
+        ]},
+        {"role": "tool", "content": video_list},
+        {"role": "assistant", "content": f"Here are the processed videos:\n{video_list}\n\nWhat would you like to know about them?"},
+    ]
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -94,11 +109,13 @@ def list_processed_videos() -> str:
             data = json.load(f)
         info = data.get("video_info", {})
         summary = data.get("summary", {})
+        description = data.get("description", "")
+        desc_part = f" — {description}" if description else ""
         lines.append(
             f"- {video_name}: {info.get('total_frames', '?')} frames, "
             f"{info.get('duration_seconds', '?'):.1f}s, "
             f"{summary.get('total_bikes_detected', '?')} bikes detected, "
-            f"{summary.get('compliance_rate', '?')}% compliance"
+            f"{summary.get('compliance_rate', '?')}% compliance{desc_part}"
         )
     return "Processed videos:\n" + "\n".join(lines)
 
@@ -110,8 +127,13 @@ def get_report_summary(video_name: str) -> str:
         return f"No report found for '{video_name}'. Use list_processed_videos() to see available videos."
     summary = report["summary"]
     info = report["video_info"]
-    return (
+    description = report.get("description", "")
+    result = (
         f"Video: {info['filename']}\n"
+    )
+    if description:
+        result += f"Description: {description}\n"
+    result += (
         f"Duration: {info['duration_seconds']:.1f}s | FPS: {info['fps']} | "
         f"Resolution: {info['resolution'][0]}x{info['resolution'][1]}\n"
         f"Total bikes: {summary['total_bikes_detected']}\n"
@@ -120,10 +142,13 @@ def get_report_summary(video_name: str) -> str:
         f"With both lights: {summary['bikes_with_both_lights']}\n"
         f"No lights: {summary['bikes_with_no_lights']}\n"
         f"Compliance rate: {summary['compliance_rate']}%\n"
-        + (f"Avg speed: {summary.get('avg_speed_all_bikes_kmh', 'N/A')} km/h\n"
-           f"Max speed: {summary.get('max_speed_any_bike_kmh', 'N/A')} km/h"
-           if 'avg_speed_all_bikes_kmh' in summary else "")
     )
+    if 'avg_speed_all_bikes_kmh' in summary:
+        result += (
+            f"Avg speed: {summary['avg_speed_all_bikes_kmh']} km/h\n"
+            f"Max speed: {summary['max_speed_any_bike_kmh']} km/h"
+        )
+    return result
 
 
 def get_bike_details(video_name: str, track_id: int) -> str:
@@ -254,7 +279,7 @@ def main():
     print("Type 'quit' or 'exit' to stop.")
     print("=" * 60)
 
-    messages = [SYSTEM_PROMPT]
+    messages = _build_seed_messages()
 
     while True:
         try:

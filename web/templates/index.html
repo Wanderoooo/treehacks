@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bike Safety Dashboard</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -12,28 +15,72 @@
 <body>
     <header class="dashboard-header">
         <div class="header-content">
-            <div class="header-title">
-                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="5.5" cy="17.5" r="3.5"/>
-                    <circle cx="18.5" cy="17.5" r="3.5"/>
-                    <path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-3 11.5V14l-3-3 4-3 2 3h2"/>
-                </svg>
-                <div>
-                    <h1>Bike Safety Dashboard</h1>
-                    <p class="subtitle">Automated bicycle light compliance analysis</p>
+            <div class="header-row">
+                <div class="header-left">
+                    <div class="header-title">
+                        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="5.5" cy="17.5" r="3.5"/>
+                            <circle cx="18.5" cy="17.5" r="3.5"/>
+                            <path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-3 11.5V14l-3-3 4-3 2 3h2"/>
+                        </svg>
+                        <div>
+                            <h1>Bike Safety Dashboard</h1>
+                            <p class="subtitle">Automated bicycle light compliance analysis</p>
+                        </div>
+                    </div>
+                    <div class="summary-stats" id="summary-stats"></div>
+                </div>
+                <div class="live-feed">
+                    <div class="live-feed-header">
+                        <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+                        <span class="live-label">CAM-01 &middot; Palm Drive</span>
+                    </div>
+                    <div class="live-feed-video">
+                        <video autoplay muted loop playsinline>
+                            <source src="/media/videos/nightbike_annotated.mp4" type="video/mp4">
+                        </video>
+                        <div class="scanline"></div>
+                        <div class="feed-overlay">
+                            <span class="feed-timestamp" id="feed-timestamp"></span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="summary-stats" id="summary-stats"></div>
     </header>
 
-    <main class="container">
+    <main class="container main-layout">
         <div class="entries-list" id="entries-list">
             <div class="loading">
                 <div class="spinner"></div>
                 <span>Loading reports...</span>
             </div>
         </div>
+        <aside class="sidebar">
+            <div class="sidebar-card">
+                <div class="section-label">No-Light Incident Hotspots</div>
+                <div id="incident-heatmap-global" class="incident-heatmap-sidebar"></div>
+            </div>
+            <div class="sidebar-card chat-card">
+                <div class="chat-header">
+                    <div class="section-label">AI Safety Agent</div>
+                    <span class="chat-model-tag">llama3.1</span>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg bot">
+                        <div class="chat-bubble">Hi! I can answer questions about your bike safety reports. Try asking "Which video has the most violations?"</div>
+                    </div>
+                </div>
+                <form class="chat-input-row" id="chat-form" autocomplete="off">
+                    <input type="text" id="chat-input" placeholder="Ask about bike safety..." autocomplete="off">
+                    <button type="submit" id="chat-send">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </aside>
     </main>
 
     <script src="/static/js/app.js"></script>
