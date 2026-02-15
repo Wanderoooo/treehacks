@@ -161,21 +161,50 @@ function renderSummaryStats(reports) {
 
 function renderEntries(reports) {
     const el = document.getElementById("entries-list");
-    el.innerHTML = "";
 
     if (reports.length === 0) {
         el.innerHTML = '<div class="no-data">No reports found. Process a video first.</div>';
         return;
     }
 
-    reports.forEach(report => {
-        el.appendChild(createEntryCard(report));
+    // Track which entries are currently expanded so we can preserve state
+    const expandedStems = new Set();
+    el.querySelectorAll(".entry-card.expanded").forEach(card => {
+        const stem = card.dataset.stem;
+        if (stem) expandedStems.add(stem);
     });
+
+    // Build a map of existing cards by stem
+    const existingCards = {};
+    el.querySelectorAll(".entry-card").forEach(card => {
+        if (card.dataset.stem) existingCards[card.dataset.stem] = card;
+    });
+
+    // Build new card list, reusing expanded cards to avoid closing them
+    const newStems = new Set(reports.map(r => r._video_stem || ""));
+    const fragment = document.createDocumentFragment();
+
+    reports.forEach(report => {
+        const stem = report._video_stem || "";
+        if (expandedStems.has(stem) && existingCards[stem]) {
+            // Keep expanded card as-is to avoid closing it
+            fragment.appendChild(existingCards[stem]);
+        } else {
+            const card = createEntryCard(report);
+            card.dataset.stem = stem;
+            fragment.appendChild(card);
+        }
+    });
+
+    // Remove old cards that no longer exist
+    el.innerHTML = "";
+    el.appendChild(fragment);
 }
 
 function createEntryCard(report) {
     const card = document.createElement("div");
     card.className = "entry-card";
+    card.dataset.stem = report._video_stem || "";
 
     const videoName = report._video_stem || report.video_info?.filename || "Unknown";
     const bikeCount = report.summary?.total_bikes_detected || 0;

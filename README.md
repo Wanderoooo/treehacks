@@ -1,210 +1,162 @@
-# Bike Detection and Analysis System
+# Bike Safety Dashboard
 
-A computer vision system that detects bikes in videos, identifies bike lights, and describes bike colors using YOLO11 and LLaVA vision language model.
+Real-time bike detection and safety monitoring system built at TreeHacks 2026. Uses a Jetson Orin Nano with NanoOWL for on-device detection, streams live video to a Mac-based dashboard, and drives an autonomous differential-drive vehicle via Arduino motor control.
 
-## Features
+## Architecture
 
-- **Bike Detection**: Uses YOLO11 to detect bicycles in video frames
-- **Light Detection**: Identifies front and rear bike lights using brightness-based heuristics
-- **Color Analysis**: Describes bike colors using LLaVA VLM running locally via Ollama
-- **Multi-bike Tracking**: Tracks multiple bikes across frames with unique IDs
-- **Dual Output**: Generates both annotated videos and detailed JSON reports
-
-## Requirements
-
-- Python 3.9 or higher
-- Ollama installed locally
-- Optional: GPU (CUDA or Apple Silicon) for faster processing
-
-## Installation
-
-1. **Clone or navigate to project directory:**
-   ```bash
-   cd /Users/alissalol/treehacks
-   ```
-
-2. **Create virtual environment:**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-4. **Install Ollama and LLaVA model:**
-   - Download Ollama from https://ollama.ai/download
-   - After installation, run:
-     ```bash
-     ollama pull llava:latest
-     ```
-
-5. **Test installation:**
-   ```bash
-   python main.py --help
-   ```
-
-## Usage
-
-### Basic Usage
-
-```bash
-python main.py input/your_video.mp4
+```
+┌─────────────────────────┐       TCP :9000        ┌──────────────────────────┐
+│     Jetson Orin Nano     │ ───────────────────────▶│     Mac (Laptop)         │
+│                          │   frames + boxes +      │                          │
+│  NanoOWL detection       │   bike flag             │  stream_receiver.py      │
+│  Camera capture          │                         │  ├─ light detection      │
+│  Bounding box overlay    │◀─────────────────────── │  ├─ video recording      │
+│  Motor command listener  │   UDP :9001             │  ├─ depth estimation     │
+│                          │   keyboard drive cmds   │  └─ report generation    │
+└────────┬────────────────┘                         │                          │
+         │ Serial USB                                │  web/app.py (Flask)      │
+         │                                           │  ├─ live MJPEG feed      │
+┌────────▼────────────────┐                         │  ├─ incident dashboard   │
+│       Arduino            │                         │  └─ AI chat agent        │
+│  ESC PWM motor control   │                         └──────────────────────────┘
+│  2x brushless motors     │
+└─────────────────────────┘
 ```
 
-This will:
-- Detect bikes in the video
-- Process light detection (once implemented)
-- Generate color analysis (once implemented)
-- Save annotated video to `output/videos/`
-- Save JSON report to `output/reports/`
+## Components
 
-### Advanced Options
+### Jetson (`jetson/`)
+
+| File | Purpose |
+|------|---------|
+| `detect_and_record.py` | Main script: camera capture, NanoOWL inference, TCP streaming, UDP motor command listener |
+| `motor_serial.py` | Serial driver for Arduino motor controller |
+| `motor_controller.py` | Alternative GPIO-based PWM motor control (unused with Arduino setup) |
+| `drive_test.py` | Standalone motor test script |
+
+Runs inside the NanoOWL Docker container on Jetson:
 
 ```bash
-# Specify output directory
-python main.py input/video.mp4 -o /path/to/output
-
-# Override confidence threshold
-python main.py input/video.mp4 --confidence 0.5
-
-# Use larger YOLO model (more accurate, slower)
-python main.py input/video.mp4 --model yolo11s
-
-# Skip video generation (faster)
-python main.py input/video.mp4 --no-video
-
-# Custom configuration file
-python main.py input/video.mp4 -c custom_config.yaml
+jetson-containers run --workdir /opt/nanoowl \
+  -v ~/detect_and_record.py:/opt/nanoowl/detect_and_record.py \
+  -v ~/motor_serial.py:/opt/nanoowl/motor_serial.py \
+  --device /dev/video0 \
+  --device /dev/ttyACM0 \
+  $(autotag nanoowl) \
+  bash -c "pip install pyserial && python3 detect_and_record.py"
 ```
 
-## Configuration
+### Arduino (`arduino/motor_controller/`)
 
-Edit `config.yaml` to customize:
+Controls 2 brushless ESCs via PWM. Serial protocol (115200 baud):
 
-- **YOLO settings**: Model variant, confidence threshold
-- **Light detection**: Brightness thresholds, ROI zones, shape filters
-- **Color analysis**: Sampling frequency, consensus parameters
-- **Video output**: Annotation style, frame skipping
-- **Performance**: GPU usage, batch processing
+| Command | Action |
+|---------|--------|
+| `A\n` | Arm both ESCs (3s blocking) |
+| `M<left>,<right>\n` | Set motor speeds 0-100 (e.g. `M60,60`) |
+| `S\n` | Stop both motors |
+
+### Mac / Laptop
+
+| File | Purpose |
+|------|---------|
+| `stream_receiver.py` | Receives TCP stream from Jetson, runs light detection on bike crops, records 5s clips, generates reports, runs depth estimation |
+| `web/app.py` | Flask dashboard with live feed, incident table, AI chat |
+| `keyboard_drive.py` | Terminal keyboard controller — sends UDP drive commands to Jetson |
+
+### Streaming Protocol (TCP :9000)
+
+Each frame sent as:
+```
+[4B frame_size][4B boxes_size][1B bike_flag][JPEG data][boxes JSON]
+```
+
+### Dashboard (`web/`)
+
+Flask app serving at `http://localhost:8081`:
+- Live MJPEG camera feed from Jetson (`/api/live`)
+- Incident table with annotated video, depth video, and JSON reports
+- AI chat agent for querying bike safety data
+
+## Setup & Usage
+
+### 1. Jetson Orin Nano
+
+SCP files to the Jetson:
+```bash
+scp jetson/detect_and_record.py jetson/motor_serial.py jetson@100.73.97.1:~/
+```
+
+SSH in and run the Docker container (see command above).
+
+### 2. Arduino
+
+Flash `arduino/motor_controller/motor_controller.ino` via Arduino IDE. Connect to Jetson via USB serial.
+
+### 3. Mac Dashboard
+
+```bash
+pip install -r requirements.txt
+python web/app.py <JETSON_TAILSCALE_IP>
+# e.g. python web/app.py 100.73.97.1
+```
+
+### 4. Keyboard Driving (optional)
+
+```bash
+python keyboard_drive.py <JETSON_TAILSCALE_IP>
+```
+
+Controls: `W`/`S`/`A`/`D` or arrow keys, `+`/`-` speed, `SPACE` arm ESCs, `Q` quit.
+
+## Wiring
+
+### ESC → Jetson 40-pin Header (if using GPIO, pins 32/33)
+### ESC → Arduino (if using serial, pins 9/10)
+
+| ESC Wire | Arduino Pin |
+|----------|-------------|
+| Left signal | Pin 9 |
+| Right signal | Pin 10 |
+| GND | Arduino GND |
+| VCC (red) | **DISCONNECTED** |
+
+Battery connects directly to ESC power inputs (not through Arduino or Jetson).
 
 ## Project Structure
 
 ```
 treehacks/
-├── main.py                   # CLI entry point
-├── config.yaml               # Configuration parameters
-├── requirements.txt          # Python dependencies
-├── src/
-│   ├── detector.py          # YOLO bike detection
-│   ├── light_detector.py    # Light detection algorithm (Phase 2)
-│   ├── color_analyzer.py    # LLaVA integration (Phase 3)
-│   ├── video_processor.py   # Main pipeline
-│   ├── annotator.py         # Video annotation (Phase 4)
-│   ├── report_generator.py  # JSON reports (Phase 4)
-│   └── utils.py             # Utilities and tracking (Phase 4)
-├── input/                    # Place input videos here
-└── output/
-    ├── videos/              # Annotated videos
-    └── reports/             # JSON reports
+├── arduino/motor_controller/   # Arduino ESC controller
+├── jetson/                     # Jetson Orin Nano scripts
+│   ├── detect_and_record.py    # Camera + NanoOWL + streaming
+│   ├── motor_serial.py         # Arduino serial driver
+│   ├── motor_controller.py     # GPIO PWM alternative
+│   └── drive_test.py           # Motor test
+├── src/                        # CV pipeline modules
+│   ├── detector.py             # YOLO bike detection
+│   ├── light_detector.py       # Bike light detection
+│   ├── depth_estimator.py      # Depth estimation
+│   ├── annotator.py            # Video annotation
+│   ├── report_generator.py     # JSON report generation
+│   └── ...
+├── web/                        # Flask dashboard
+│   ├── app.py
+│   ├── templates/
+│   └── static/
+├── stream_receiver.py          # Mac-side stream receiver
+├── keyboard_drive.py           # Keyboard motor control
+├── agent.py                    # AI chat agent
+├── config.yaml                 # Pipeline configuration
+└── requirements.txt
 ```
 
-## Current Status
+## Hardware
 
-**Phase 1 (Foundation): ✅ Complete**
-- Project structure created
-- YOLO bike detection implemented
-- Basic video processing pipeline functional
-- CLI interface ready
-
-**Phase 2 (Light Detection): ✅ Complete**
-- Brightness-based light detection algorithm with multi-stage filtering
-- ROI extraction (front/rear zones) and shape filtering
-- Circularity and brightness validation
-- Full integration with pipeline
-
-**Phase 3 (Color Analysis): ✅ Complete**
-- LLaVA/Ollama integration
-- Sparse sampling (every 30th frame)
-- Consensus voting for reliable color detection
-- Color normalization
-
-**Phase 4 (Tracking & Output): ✅ Complete**
-- Multi-bike tracking with IoU matching
-- Enhanced video annotation with track IDs, colors, and lights
-- Comprehensive JSON report generation
-- Per-track aggregation of light and color data
-
-## Output Format
-
-### Annotated Video
-- Bounding boxes around detected bikes
-- Light indicators (green for front, red for rear)
-- Color labels
-- Track IDs
-
-### JSON Report
-```json
-{
-  "video_info": {
-    "filename": "input.mp4",
-    "fps": 30,
-    "total_frames": 900
-  },
-  "summary": {
-    "total_bikes_detected": 3,
-    "bikes_with_front_lights": 2,
-    "bikes_with_rear_lights": 1
-  },
-  "bikes": [
-    {
-      "track_id": 1,
-      "color": {"primary_color": "red", "confidence": 0.87},
-      "lights": {"has_front_light": true, "has_rear_light": true}
-    }
-  ]
-}
-```
-
-## Performance
-
-Expected processing speed:
-- **With GPU** (M1/M2 Mac or NVIDIA): 15-20 fps
-- **CPU only**: 5-8 fps
-
-For 1080p 30fps video:
-- With GPU: ~1.5-2x slower than real-time
-- With CPU: ~4-6x slower than real-time
-
-## Troubleshooting
-
-**"Ollama not found" error:**
-- Make sure Ollama is installed and running
-- Test with: `ollama list`
-
-**"Model not found" error:**
-- Download LLaVA: `ollama pull llava:latest`
-- Download YOLO model (auto-downloads on first run)
-
-**Slow processing:**
-- Use smaller YOLO model (yolo11n)
-- Enable frame skipping in config.yaml
-- Reduce video resolution before processing
-
-**GPU not detected:**
-- Check CUDA installation (NVIDIA)
-- Check torch.backends.mps (Apple Silicon)
-- System will automatically fallback to CPU
-
-## License
-
-MIT License
-
-## Acknowledgments
-
-- YOLO11 by Ultralytics
-- LLaVA vision language model
-- Ollama for local LLM/VLM inference
+- Jetson Orin Nano (JetPack OS, Tailscale VPN)
+- USB camera (640x480)
+- IMU (I2C on pins 1, 3, 5, 6)
+- Arduino Uno/Nano (serial USB to Jetson)
+- 2x THOR 2830 Brushless Motors (1120KV, 51:1 gear ratio)
+- 2x ESCs (standard RC, 50Hz PWM)
+- Battery (~15V)
