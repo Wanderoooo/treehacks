@@ -22,7 +22,9 @@
       "WebFetch(domain:developer.ridgerun.com)",
       "WebFetch(domain:blog.roboflow.com)",
       "Bash(scp:*)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xargs:*)",
+      "Bash(wc:*)"
     ]
   }
 }
