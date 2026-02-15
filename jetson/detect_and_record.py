@@ -1,16 +1,18 @@
 """
-Jetson: lightweight bike detection + video streaming to laptop.
+Jetson: lightweight bike detection + video streaming to laptop + motor control.
 
 Streams camera frames over TCP. NanoOWL runs in a background thread as a bike
-trigger. Laptop receives frames + detection flag and handles recording/processing.
+trigger. Receives motor commands via UDP from laptop keyboard controller.
 
 Runs inside the jetson-containers NanoOWL container:
 
     jetson-containers run --workdir /opt/nanoowl \
       -v ~/detect_and_record.py:/opt/nanoowl/detect_and_record.py \
+      -v ~/motor_serial.py:/opt/nanoowl/motor_serial.py \
       --device /dev/video0 \
+      --device /dev/ttyACM0 \
       $(autotag nanoowl) \
-      python3 detect_and_record.py
+      bash -c "pip install pyserial && python3 detect_and_record.py"
 """
 
 import cv2
@@ -28,6 +30,9 @@ from nanoowl.owl_predictor import OwlPredictor
 # Stream server
 STREAM_PORT = 9000
 SEND_TIMEOUT = 10.0  # seconds
+
+# Motor command receiver (UDP from laptop keyboard)
+MOTOR_CMD_PORT = 9001
 
 # NanoOWL detection
 ENGINE_PATH = "/opt/nanoowl/data/owl_image_encoder_patch32.engine"
@@ -169,6 +174,56 @@ def configure_socket(sock):
     sock.settimeout(SEND_TIMEOUT)
 
 
+# ── Motor command listener ───────────────────────────────────────────────────
+
+class MotorCommandListener:
+    """Receives UDP motor commands from laptop and forwards to Arduino via serial."""
+
+    def __init__(self, port=MOTOR_CMD_PORT):
+        self._port = port
+        self._motor = None
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        # Try to connect to Arduino
+        try:
+            from motor_serial import MotorDriver
+            self._motor = MotorDriver()
+            print(f"[motor] Arduino connected, listening for commands on UDP :{self._port}")
+        except Exception as e:
+            print(f"[motor] Arduino not found ({e}), motor commands disabled")
+            # Still listen so we don't crash, just print commands
+            self._motor = None
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("0.0.0.0", self._port))
+        sock.settimeout(1.0)
+
+        while self._running:
+            try:
+                data, addr = sock.recvfrom(256)
+                cmd = data.decode().strip()
+                if not cmd:
+                    continue
+                print(f"[motor] cmd: {cmd}")
+                if self._motor:
+                    self._motor._send(cmd)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[motor] Error: {e}")
+
+        sock.close()
+        if self._motor:
+            self._motor.stop()
+            self._motor.close()
+
+    def stop(self):
+        self._running = False
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -191,6 +246,9 @@ def main():
 
     # Detection thread
     detector = DetectionThread(predictor, text_encodings)
+
+    # Motor command listener (UDP from laptop keyboard)
+    motor_listener = MotorCommandListener()
 
     # Start TCP server
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -256,6 +314,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[main] Shutting down...")
     finally:
+        motor_listener.stop()
         detector.stop()
         camera.stop()
         if conn:

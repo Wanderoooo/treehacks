@@ -1,79 +1,43 @@
-import Jetson.GPIO as GPIO
+"""
+Test script: arm ESCs and drive straight.
+Run inside the NanoOWL container on Jetson.
+
+    jetson-containers run --workdir /opt/nanoowl \
+      -v ~/motor_serial.py:/opt/nanoowl/motor_serial.py \
+      -v ~/drive_test.py:/opt/nanoowl/drive_test.py \
+      --device /dev/ttyACM0 \
+      $(autotag nanoowl) \
+      python3 drive_test.py
+
+Or without container (if pyserial is installed):
+    sudo python3 drive_test.py
+"""
+
 import time
+from motor_serial import MotorDriver
 
 
-class MotorController:
-    """Controls a single brushless motor via ESC PWM signal."""
+def main():
+    motor = MotorDriver()
 
-    def __init__(self, pin, freq=50):
-        self.pin = pin
-        self.freq = freq
-        GPIO.setup(pin, GPIO.OUT)
-        self.pwm = GPIO.PWM(pin, freq)
-        self.pwm.start(0)
+    try:
+        motor.arm()
+        input("ESCs armed. Press Enter to drive forward (Ctrl+C to abort)...")
 
-    def set_throttle(self, percent):
-        """Set motor throttle 0-100%. Maps to 1000-2000us pulse width."""
-        percent = max(0.0, min(100.0, float(percent)))
-        duty = 5.0 + (percent / 100.0) * 5.0
-        self.pwm.ChangeDutyCycle(duty)
-
-    def arm(self):
-        """Arm ESC by holding minimum throttle for 3 seconds."""
-        print(f"  Arming ESC on pin {self.pin}...")
-        self.set_throttle(0)
+        print("Driving forward at 15% for 3 seconds...")
+        motor.forward(speed=15)
         time.sleep(3)
-        print(f"  ESC on pin {self.pin} armed.")
 
-    def stop(self):
-        self.set_throttle(0)
+        print("Stopping.")
+        motor.stop()
+        time.sleep(1)
 
-    def cleanup(self):
-        self.pwm.stop()
+    except KeyboardInterrupt:
+        print("\nEmergency stop!")
+    finally:
+        motor.close()
+        print("Done.")
 
 
-class DifferentialDrive:
-    """Differential drive controller for 2 brushless motors.
-
-    Wiring (Jetson Orin Nano 40-pin header):
-        ESC #1 (left):  signal=Pin 32 (PWM0), GND=Pin 30
-        ESC #2 (right): signal=Pin 33 (PWM1), GND=Pin 34
-    """
-
-    def __init__(self, left_pin=32, right_pin=33):
-        GPIO.setmode(GPIO.BOARD)
-        self.left = MotorController(left_pin)
-        self.right = MotorController(right_pin)
-
-    def arm(self):
-        """Arm both ESCs. Wait for confirmation beeps."""
-        print("Arming ESCs...")
-        self.left.set_throttle(0)
-        self.right.set_throttle(0)
-        time.sleep(3)
-        print("Both ESCs armed.")
-
-    def forward(self, speed=50):
-        """Drive forward. speed: 0-100%."""
-        self.left.set_throttle(speed)
-        self.right.set_throttle(speed)
-
-    def turn_left(self, speed=50, ratio=0.3):
-        """Turn left by slowing the left motor."""
-        self.left.set_throttle(speed * ratio)
-        self.right.set_throttle(speed)
-
-    def turn_right(self, speed=50, ratio=0.3):
-        """Turn right by slowing the right motor."""
-        self.left.set_throttle(speed)
-        self.right.set_throttle(speed * ratio)
-
-    def stop(self):
-        self.left.stop()
-        self.right.stop()
-
-    def cleanup(self):
-        self.stop()
-        self.left.cleanup()
-        self.right.cleanup()
-        GPIO.cleanup()
+if __name__ == "__main__":
+    main()
