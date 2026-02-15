@@ -1,62 +1,79 @@
-"""
-Standalone test script for brushless motor control via ESC PWM.
-
-Run on Jetson Orin Nano:
-    sudo python3 drive_test.py
-
-Wiring:
-    ESC #1 (left):  signal=Pin 32, GND=Pin 30
-    ESC #2 (right): signal=Pin 33, GND=Pin 34
-    VCC (red wire) on both ESCs: DISCONNECTED
-
-Test sequence:
-    1. Arm ESCs (3s at min throttle - listen for beeps)
-    2. Forward at 15% for 3s
-    3. Turn left at 15% for 2s
-    4. Turn right at 15% for 2s
-    5. Stop
-
-Press Ctrl+C at any time for emergency stop.
-"""
-
+import Jetson.GPIO as GPIO
 import time
-from motor_controller import DifferentialDrive
 
 
-def main():
-    drive = DifferentialDrive(left_pin=32, right_pin=33)
+class MotorController:
+    """Controls a single brushless motor via ESC PWM signal."""
 
-    try:
-        # Step 1: Arm
-        drive.arm()
-        input("ESCs armed. Press Enter to start test sequence (or Ctrl+C to abort)...")
+    def __init__(self, pin, freq=50):
+        self.pin = pin
+        self.freq = freq
+        GPIO.setup(pin, GPIO.OUT)
+        self.pwm = GPIO.PWM(pin, freq)
+        self.pwm.start(0)
 
-        # Step 2: Forward
-        print("Forward at 15% throttle...")
-        drive.forward(speed=15)
+    def set_throttle(self, percent):
+        """Set motor throttle 0-100%. Maps to 1000-2000us pulse width."""
+        percent = max(0.0, min(100.0, float(percent)))
+        duty = 5.0 + (percent / 100.0) * 5.0
+        self.pwm.ChangeDutyCycle(duty)
+
+    def arm(self):
+        """Arm ESC by holding minimum throttle for 3 seconds."""
+        print(f"  Arming ESC on pin {self.pin}...")
+        self.set_throttle(0)
         time.sleep(3)
+        print(f"  ESC on pin {self.pin} armed.")
 
-        # Step 3: Turn left
-        print("Turning left...")
-        drive.turn_left(speed=15, ratio=0.3)
-        time.sleep(2)
+    def stop(self):
+        self.set_throttle(0)
 
-        # Step 4: Turn right
-        print("Turning right...")
-        drive.turn_right(speed=15, ratio=0.3)
-        time.sleep(2)
-
-        # Step 5: Stop
-        print("Stopping.")
-        drive.stop()
-        time.sleep(1)
-
-    except KeyboardInterrupt:
-        print("\nEmergency stop!")
-    finally:
-        drive.cleanup()
-        print("Motors stopped, GPIO cleaned up.")
+    def cleanup(self):
+        self.pwm.stop()
 
 
-if __name__ == "__main__":
-    main()
+class DifferentialDrive:
+    """Differential drive controller for 2 brushless motors.
+
+    Wiring (Jetson Orin Nano 40-pin header):
+        ESC #1 (left):  signal=Pin 32 (PWM0), GND=Pin 30
+        ESC #2 (right): signal=Pin 33 (PWM1), GND=Pin 34
+    """
+
+    def __init__(self, left_pin=32, right_pin=33):
+        GPIO.setmode(GPIO.BOARD)
+        self.left = MotorController(left_pin)
+        self.right = MotorController(right_pin)
+
+    def arm(self):
+        """Arm both ESCs. Wait for confirmation beeps."""
+        print("Arming ESCs...")
+        self.left.set_throttle(0)
+        self.right.set_throttle(0)
+        time.sleep(3)
+        print("Both ESCs armed.")
+
+    def forward(self, speed=50):
+        """Drive forward. speed: 0-100%."""
+        self.left.set_throttle(speed)
+        self.right.set_throttle(speed)
+
+    def turn_left(self, speed=50, ratio=0.3):
+        """Turn left by slowing the left motor."""
+        self.left.set_throttle(speed * ratio)
+        self.right.set_throttle(speed)
+
+    def turn_right(self, speed=50, ratio=0.3):
+        """Turn right by slowing the right motor."""
+        self.left.set_throttle(speed)
+        self.right.set_throttle(speed * ratio)
+
+    def stop(self):
+        self.left.stop()
+        self.right.stop()
+
+    def cleanup(self):
+        self.stop()
+        self.left.cleanup()
+        self.right.cleanup()
+        GPIO.cleanup()

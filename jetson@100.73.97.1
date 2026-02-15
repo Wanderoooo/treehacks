@@ -14,7 +14,6 @@ Runs inside the jetson-containers NanoOWL container:
 """
 
 import cv2
-import json
 import time
 import struct
 import socket
@@ -27,7 +26,7 @@ from nanoowl.owl_predictor import OwlPredictor
 
 # Stream server
 STREAM_PORT = 9000
-SEND_TIMEOUT = 10.0  # seconds
+SEND_TIMEOUT = 3.0  # seconds
 
 # NanoOWL detection
 ENGINE_PATH = "/opt/nanoowl/data/owl_image_encoder_patch32.engine"
@@ -112,7 +111,6 @@ class DetectionThread:
         self._frame_to_detect = None
         self._event = threading.Event()
         self.bike_detected = False
-        self.boxes = []  # list of [x1, y1, x2, y2] in pixel coords
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -128,7 +126,6 @@ class DetectionThread:
                 self._frame_to_detect = None
             if frame is None:
                 continue
-            h, w = frame.shape[:2]
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             output = self._predictor.predict(
                 image=image,
@@ -136,14 +133,7 @@ class DetectionThread:
                 text_encodings=self._text_encodings,
                 threshold=CONFIDENCE_THRESHOLD,
             )
-            detected = len(output.boxes) > 0
-            boxes = []
-            if detected:
-                for box in output.boxes:
-                    x1, y1, x2, y2 = box.tolist()
-                    boxes.append([int(x1), int(y1), int(x2), int(y2)])
-            self.bike_detected = detected
-            self.boxes = boxes
+            self.bike_detected = len(output.boxes) > 0
 
     def submit(self, frame):
         """Submit a frame for detection (non-blocking, drops if busy)."""
@@ -216,25 +206,16 @@ def main():
             if frame_idx % DETECT_EVERY_N == 0:
                 detector.submit(frame)
 
-            # Draw bounding boxes if detected
-            boxes = detector.boxes
-            if boxes:
-                for (x1, y1, x2, y2) in boxes:
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
             # Encode frame as JPEG
             _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             data = jpeg.tobytes()
 
-            # Encode box coordinates as JSON bytes
-            boxes_json = json.dumps(boxes).encode() if boxes else b"[]"
-
-            # Send: [4B frame_size][4B boxes_size][1B bike_flag][JPEG][boxes_json]
-            header = struct.pack(">IIB", len(data), len(boxes_json), int(detector.bike_detected))
+            # Send: [4 bytes frame size] [1 byte bike flag] [JPEG data]
+            header = struct.pack(">IB", len(data), int(detector.bike_detected))
 
             if conn is not None:
                 try:
-                    conn.sendall(header + data + boxes_json)
+                    conn.sendall(header + data)
                 except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
                     print("[stream] Send failed, awaiting reconnect...")
                     conn.close()
@@ -251,7 +232,6 @@ def main():
                     pass
 
             frame_idx += 1
-            time.sleep(0.033)  # cap at ~30fps to avoid flooding the link
 
     except KeyboardInterrupt:
         print("\n[main] Shutting down...")

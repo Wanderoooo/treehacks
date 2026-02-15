@@ -9,14 +9,17 @@ Default Jetson IP is read from ~/.ssh/config (Host jetson).
 """
 
 import cv2
+import json
 import sys
 import struct
 import socket
 import time
+import yaml
 import threading
 import numpy as np
 from datetime import datetime
 from pathlib import Path
+from src.light_detector import LightDetector
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -36,6 +39,16 @@ RECV_TIMEOUT = 10.0
 
 OUTPUT_DIR = Path("./output")
 INPUT_DIR = Path("./input")
+
+# Shared latest frame for live feed (single frame, no accumulation)
+_live_frame_lock = threading.Lock()
+_live_frame_jpeg = None  # bytes: most recent JPEG-encoded frame
+
+
+def get_live_frame():
+    """Return the latest JPEG frame bytes (or None if no stream)."""
+    with _live_frame_lock:
+        return _live_frame_jpeg
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -95,165 +108,227 @@ def recv_exact(sock, n):
     return buf
 
 
-def process_clip(video_path, stem):
-    """Run YOLO annotation + depth on a saved clip (background thread)."""
+def finalize_recording(video_writer):
+    """Release video writer."""
+    if video_writer is not None:
+        video_writer.release()
+
+
+def run_depth(video_path, stem):
+    """Run depth estimation on a recorded video (background thread)."""
     try:
-        import yaml
-        from src.detector import BikeDetector
-        from src.utils import SimpleTracker
-        from src.annotator import VideoAnnotator
-        from src.report_generator import ReportGenerator
         from src.depth_estimator import DepthEstimator
-
-        config_path = "config.yaml"
-        with open(config_path) as f:
+        with open("config.yaml") as f:
             config = yaml.safe_load(f)
-
-        detector = BikeDetector(
-            model_path=config["yolo"]["model"],
-            confidence=config["yolo"]["confidence"],
-            bike_class_id=config["yolo"]["bike_class_id"],
-            device="auto" if config["performance"]["use_gpu"] else "cpu",
-        )
-        tracker = SimpleTracker(iou_threshold=0.3)
-        annotator = VideoAnnotator(config)
-        report_gen = ReportGenerator()
-
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            print(f"[process] Could not open: {video_path}")
+        depth_config = config.get("depth_estimation", {"enabled": False})
+        if not depth_config.get("enabled", False):
+            return
+        estimator = DepthEstimator(depth_config)
+        if not estimator.enabled:
             return
 
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return
         fps = int(cap.get(cv2.CAP_PROP_FPS)) or FPS
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        videos_dir = OUTPUT_DIR / "videos"
-        reports_dir = OUTPUT_DIR / "reports"
         depth_dir = OUTPUT_DIR / "depth"
-        videos_dir.mkdir(parents=True, exist_ok=True)
-        reports_dir.mkdir(parents=True, exist_ok=True)
-
-        out_path = videos_dir / f"{stem}_annotated.mp4"
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        depth_path = depth_dir / f"{stem}_depth.mp4"
         fourcc = cv2.VideoWriter_fourcc(*"avc1")
-        out = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
+        out = cv2.VideoWriter(str(depth_path), fourcc, fps, (w, h))
 
-        frame_idx = 0
-        all_detections = []
-        track_info = {}
-
-        print(f"[process] Running YOLO on {video_path} ({total_frames} frames)")
-
+        fidx = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-
-            bikes = detector.detect_bikes(frame)
-            track_ids = tracker.update(bikes, frame_idx)
-
-            bikes_with_data = []
-            for (x1, y1, x2, y2, conf), tid in zip(bikes, track_ids):
-                bikes_with_data.append({
-                    "bbox": (x1, y1, x2, y2, conf),
-                    "track_id": tid,
-                    "lights": {"has_front": False, "has_rear": False},
-                })
-
-            all_detections.append({"frame": frame_idx, "bikes": bikes_with_data})
-            annotated = annotator.annotate_frame(frame.copy(), bikes_with_data)
-            out.write(annotated)
-            frame_idx += 1
-
+            depth_map = estimator.estimate_depth(frame)
+            if depth_map is not None:
+                colored = estimator.render_depth_colormap(depth_map)
+                out.write(colored)
+                if fidx == 0:
+                    cv2.imwrite(str(depth_dir / f"{stem}_depth.png"), colored)
+            fidx += 1
         cap.release()
         out.release()
-
-        # Build report
-        all_tracks = tracker.get_all_tracks()
-        track_data = {}
-        for tid, tdata in all_tracks.items():
-            track_data[tid] = {
-                "first_seen": tdata["first_seen"],
-                "last_seen": tdata["last_seen"],
-                "frame_history": tdata["frame_history"],
-                "lights": {
-                    "has_front_light": False,
-                    "has_rear_light": False,
-                    "front_detection_rate": 0.0,
-                    "rear_detection_rate": 0.0,
-                },
-            }
-
-        video_info = {
-            "filename": Path(video_path).name,
-            "fps": fps,
-            "resolution": [w, h],
-            "total_frames": total_frames,
-            "processed_frames": frame_idx,
-            "duration_seconds": round(total_frames / fps, 2),
-        }
-
-        report_path = reports_dir / f"{stem}_report.json"
-        report = report_gen.generate_report(
-            video_info=video_info,
-            all_detections=all_detections,
-            track_data=track_data,
-            output_path=str(report_path),
-        )
-
-        print(f"[process] Annotated video: {out_path}")
-        print(f"[process] Report: {report_path}")
-        print(f"[process] Bikes detected: {len(all_tracks)}")
-
-        # Depth estimation
-        depth_config = config.get("depth_estimation", {"enabled": False})
-        if depth_config.get("enabled", False):
-            print(f"[depth] Running depth estimation...")
-            estimator = DepthEstimator(depth_config)
-            if estimator.enabled:
-                depth_dir.mkdir(parents=True, exist_ok=True)
-                cap2 = cv2.VideoCapture(str(out_path))
-                depth_video_path = depth_dir / f"{stem}_depth.mp4"
-                depth_out = cv2.VideoWriter(str(depth_video_path), fourcc, fps, (w, h))
-
-                fidx = 0
-                while True:
-                    ret, frame = cap2.read()
-                    if not ret:
-                        break
-                    depth_map = estimator.estimate_depth(frame)
-                    if depth_map is not None:
-                        colored = estimator.render_depth_colormap(depth_map)
-                        depth_out.write(colored)
-                        if fidx == 0:
-                            cv2.imwrite(str(depth_dir / f"{stem}_depth.png"), colored)
-                    fidx += 1
-
-                cap2.release()
-                depth_out.release()
-                print(f"[depth] Depth video: {depth_video_path}")
-
+        print(f"[depth] Saved: {depth_path}")
     except Exception as e:
-        print(f"[process] Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[depth] Error: {e}")
 
 
-def finalize_recording(video_writer, clip_path):
-    """Release video writer and kick off background processing."""
-    if video_writer is not None:
-        video_writer.release()
-    if clip_path:
-        clip_stem = Path(clip_path).stem
-        threading.Thread(
-            target=process_clip,
-            args=(clip_path, clip_stem),
-            daemon=True,
-        ).start()
+def save_report(clip_path, frame_count, recording_data):
+    """Generate and save a report JSON from accumulated recording data."""
+    # stem is like "Biking-02-15-2026-06-30-21AM_annotated"
+    # strip "_annotated" to match dashboard expectations
+    full_stem = Path(clip_path).stem  # e.g. Biking-..._annotated
+    stem = full_stem.replace("_annotated", "")
+    reports_dir = OUTPUT_DIR / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    # Count unique bikes from max simultaneous detections
+    total_detections = sum(len(d["boxes"]) for d in recording_data)
+    max_simultaneous = max((len(d["boxes"]) for d in recording_data), default=0)
+
+    # Per-bike light tallies (by box index across frames)
+    bike_front = [0] * max_simultaneous
+    bike_rear = [0] * max_simultaneous
+    bike_appearances = [0] * max_simultaneous
+
+    for d in recording_data:
+        for i, light in enumerate(d["lights"]):
+            if i >= max_simultaneous:
+                break
+            bike_appearances[i] += 1
+            if light.get("has_front_light", False):
+                bike_front[i] += 1
+            if light.get("has_rear_light", False):
+                bike_rear[i] += 1
+
+    # Build bike entries
+    bikes = []
+    bikes_with_front = 0
+    bikes_with_rear = 0
+    bikes_with_both = 0
+    bikes_with_none = 0
+    violations = []
+    duration = round(frame_count / FPS, 2)
+
+    for i in range(max_simultaneous):
+        apps = max(bike_appearances[i], 1)
+        has_front = bike_front[i] / apps > 0.3
+        has_rear = bike_rear[i] / apps > 0.3
+        has_both = has_front and has_rear
+
+        if has_front:
+            bikes_with_front += 1
+        if has_rear:
+            bikes_with_rear += 1
+        if has_both:
+            bikes_with_both += 1
+        if not has_front and not has_rear:
+            bikes_with_none += 1
+            violations.append({
+                "type": "NO_LIGHTS",
+                "track_id": i + 1,
+                "severity": "HIGH",
+                "description": "Bike detected without front or rear lights",
+            })
+        elif not has_front:
+            violations.append({
+                "type": "MISSING_FRONT_LIGHT",
+                "track_id": i + 1,
+                "severity": "MEDIUM",
+                "description": "Bike missing front light",
+            })
+        elif not has_rear:
+            violations.append({
+                "type": "MISSING_REAR_LIGHT",
+                "track_id": i + 1,
+                "severity": "MEDIUM",
+                "description": "Bike missing rear light",
+            })
+
+        compliance_status = "COMPLIANT" if has_both else "NON-COMPLIANT"
+        bikes.append({
+            "track_id": i + 1,
+            "first_seen_frame": 0,
+            "last_seen_frame": frame_count - 1,
+            "duration_seconds": duration,
+            "total_appearances": bike_appearances[i],
+            "color": {"primary_color": "unknown", "confidence": 0.0},
+            "lights": {
+                "has_front_light": has_front,
+                "has_rear_light": has_rear,
+                "has_both_lights": has_both,
+                "front_light_detection_rate": round(bike_front[i] / apps, 2),
+                "rear_light_detection_rate": round(bike_rear[i] / apps, 2),
+                "compliance_status": compliance_status,
+            },
+        })
+
+    compliance_rate = round(bikes_with_both / max(max_simultaneous, 1) * 100, 1)
+
+    report = {
+        "report_metadata": {
+            "generated_at": datetime.now().isoformat(),
+            "timestamp_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "report_version": "1.0",
+        },
+        "video_metadata": {
+            "location": {
+                "lat": 37.4275,
+                "lng": -122.1697,
+                "name": "Palm Drive, Stanford, CA",
+            },
+            "time_of_day": "night",
+        },
+        "video_info": {
+            "filename": Path(clip_path).name,
+            "fps": FPS,
+            "resolution": [FRAME_WIDTH, FRAME_HEIGHT],
+            "total_frames": frame_count,
+            "processed_frames": frame_count,
+            "duration_seconds": duration,
+        },
+        "summary": {
+            "total_bikes_detected": max_simultaneous,
+            "bikes_with_front_lights": bikes_with_front,
+            "bikes_with_rear_lights": bikes_with_rear,
+            "bikes_with_both_lights": bikes_with_both,
+            "bikes_with_no_lights": bikes_with_none,
+            "bikes_missing_front_light": max_simultaneous - bikes_with_front,
+            "bikes_missing_rear_light": max_simultaneous - bikes_with_rear,
+            "compliance_rate": compliance_rate,
+        },
+        "violations": violations,
+        "bikes": bikes,
+        "processing_stats": {
+            "total_processing_time_seconds": 0,
+            "processed_frames": frame_count,
+            "total_detections": total_detections,
+            "average_detections_per_frame": round(total_detections / max(frame_count, 1), 2),
+        },
+    }
+
+    report_path = reports_dir / f"{stem}_report.json"
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+    print(f"[report] Saved: {report_path}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
+def reencode_to_mp4(avi_path, real_fps, stem):
+    """Re-encode MJPG .avi to H.264 .mp4, then run depth on the .mp4."""
+    try:
+        import os
+        mp4_path = avi_path.replace(".avi", ".mp4")
+        cap = cv2.VideoCapture(avi_path)
+        if not cap.isOpened():
+            return
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = max(int(round(real_fps)), 1)
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        out = cv2.VideoWriter(mp4_path, fourcc, fps, (w, h))
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+        cap.release()
+        out.release()
+        os.remove(avi_path)
+        print(f"[reencode] {mp4_path} ({fps} fps)")
+
+        # Now run depth on the finished .mp4
+        run_depth(mp4_path, stem)
+    except Exception as e:
+        print(f"[reencode] Error: {e}")
+
 
 def main():
     # Get Jetson IP
@@ -267,6 +342,24 @@ def main():
             sys.exit(1)
 
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Load light detector once
+    with open("config.yaml") as f:
+        config = yaml.safe_load(f)
+    light_det = LightDetector(config["light_detection"])
+
+    # Recording state persists across reconnects
+    state = "IDLE"
+    consecutive_detect = 0
+    consecutive_absent = 0
+    video_writer = None
+    current_clip_path = None
+    frame_count = 0
+    recording_data = []
+    recording_start_time = 0.0
+    last_recording_end = 0.0  # cooldown: no new recording within 5s
+    RECORDING_COOLDOWN = 5.0
+    fourcc = cv2.VideoWriter_fourcc(*"MJPG")  # fast for real-time recording
 
     delay = RECONNECT_DELAY
     sock = None
@@ -285,39 +378,55 @@ def main():
                 delay = min(delay * 2, MAX_RECONNECT_DELAY)
                 continue
 
-            # Reset state for this connection
-            state = "IDLE"
-            consecutive_detect = 0
-            consecutive_absent = 0
-            video_writer = None
-            current_clip_path = None
-            frame_count = 0
-            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
-
             print("[main] Receiving stream (Ctrl+C to stop)")
 
             try:
                 while True:
-                    # Read header: 4 bytes size + 1 byte bike flag
-                    header = recv_exact(sock, 5)
-                    frame_size, bike_flag = struct.unpack(">IB", header)
+                    # Read header: 4B frame_size + 4B boxes_size + 1B bike flag
+                    header = recv_exact(sock, 9)
+                    frame_size, boxes_size, bike_flag = struct.unpack(">IIB", header)
                     bike_detected = bool(bike_flag)
 
-                    # Read JPEG data
+                    # Read JPEG data + box coordinates
                     jpeg_data = recv_exact(sock, frame_size)
+                    boxes_data = recv_exact(sock, boxes_size)
+                    boxes = json.loads(boxes_data)
+
                     frame = cv2.imdecode(np.frombuffer(jpeg_data, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is None:
                         continue
 
+                    # Run light detection on each detected bike box
+                    for (x1, y1, x2, y2) in boxes:
+                        crop = frame[y1:y2, x1:x2]
+                        lights = light_det.detect_bike_lights(crop)
+                        label = ""
+                        if lights["has_front_light"]:
+                            label += "F "
+                        if lights["has_rear_light"]:
+                            label += "R"
+                        if not label:
+                            label = "NO LIGHTS"
+                        cv2.putText(frame, label.strip(), (x1, y1 - 8),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+                    # Update shared live frame for web UI
+                    global _live_frame_jpeg
+                    with _live_frame_lock:
+                        _live_frame_jpeg = jpeg_data
+
                     if state == "IDLE":
                         if bike_detected:
                             consecutive_detect += 1
-                            if consecutive_detect >= START_FRAMES:
+                            cooldown_ok = (time.time() - last_recording_end) >= RECORDING_COOLDOWN
+                            if consecutive_detect >= START_FRAMES and cooldown_ok:
                                 now = datetime.now()
                                 date_str = now.strftime("%m-%d-%Y")
                                 time_str = now.strftime("%I-%M-%S%p")
                                 stem = f"Biking-{date_str}-{time_str}"
-                                current_clip_path = str(INPUT_DIR / f"{stem}.avi")
+                                videos_dir = OUTPUT_DIR / "videos"
+                                videos_dir.mkdir(parents=True, exist_ok=True)
+                                current_clip_path = str(videos_dir / f"{stem}_annotated.avi")
                                 h, w = frame.shape[:2]
                                 video_writer = cv2.VideoWriter(
                                     current_clip_path, fourcc, FPS, (w, h)
@@ -326,6 +435,8 @@ def main():
                                 consecutive_detect = 0
                                 consecutive_absent = 0
                                 frame_count = 0
+                                recording_data = []
+                                recording_start_time = time.time()
                                 print(f"[main] RECORDING started: {current_clip_path}")
                         else:
                             consecutive_detect = 0
@@ -334,27 +445,35 @@ def main():
                         video_writer.write(frame)
                         frame_count += 1
 
+                        # Accumulate light detection results for report
+                        frame_lights = []
+                        for (x1, y1, x2, y2) in boxes:
+                            crop = frame[y1:y2, x1:x2]
+                            frame_lights.append(light_det.detect_bike_lights(crop))
+                        recording_data.append({"boxes": boxes, "lights": frame_lights})
+
                         if not bike_detected:
                             consecutive_absent += 1
                             if consecutive_absent >= STOP_FRAMES:
                                 video_writer.release()
                                 video_writer = None
-                                duration = frame_count / FPS
-                                print(f"[main] RECORDING stopped: {frame_count} frames ({duration:.1f}s)")
+                                elapsed = max(time.time() - recording_start_time, 0.1)
+                                real_fps = frame_count / elapsed
+                                print(f"[main] RECORDING stopped: {frame_count} frames in {elapsed:.1f}s ({real_fps:.1f} fps)")
 
-                                # Process in background
-                                clip_path = current_clip_path
-                                clip_stem = Path(clip_path).stem
-                                thread = threading.Thread(
-                                    target=process_clip,
-                                    args=(clip_path, clip_stem),
+                                save_report(current_clip_path, frame_count, recording_data)
+                                # Re-encode to MP4 then depth in background
+                                clip_stem = Path(current_clip_path).stem.replace("_annotated", "")
+                                threading.Thread(
+                                    target=reencode_to_mp4,
+                                    args=(current_clip_path, real_fps, clip_stem),
                                     daemon=True,
-                                )
-                                thread.start()
-
+                                ).start()
                                 current_clip_path = None
+                                recording_data = []
                                 state = "IDLE"
                                 consecutive_absent = 0
+                                last_recording_end = time.time()
                         else:
                             consecutive_absent = 0
 
@@ -364,10 +483,7 @@ def main():
                 print(f"[stream] Disconnected: {e}, will reconnect...")
                 sock.close()
                 sock = None
-                # Finalize any in-progress recording
-                finalize_recording(video_writer, current_clip_path)
-                video_writer = None
-                current_clip_path = None
+                # Do NOT reset recording state — persist across reconnects
                 time.sleep(delay)
                 delay = min(delay * 2, MAX_RECONNECT_DELAY)
                 continue
@@ -376,7 +492,13 @@ def main():
         print("\n[main] Shutting down...")
     finally:
         if video_writer is not None:
-            finalize_recording(video_writer, current_clip_path)
+            video_writer.release()
+            if current_clip_path and frame_count > 0:
+                elapsed = max(time.time() - recording_start_time, 0.1)
+                real_fps = frame_count / elapsed
+                save_report(current_clip_path, frame_count, recording_data)
+                clip_stem = Path(current_clip_path).stem.replace("_annotated", "")
+                reencode_to_mp4(current_clip_path, real_fps, clip_stem)
         if sock:
             sock.close()
         print("[main] Done")

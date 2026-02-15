@@ -59,6 +59,7 @@ body {
     display: flex;
     align-items: center;
     gap: 1rem;
+    margin-bottom: 1.25rem;
 }
 
 .logo-icon {
@@ -83,7 +84,7 @@ body {
 
 .header-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
     gap: 2rem;
 }
@@ -96,7 +97,7 @@ body {
 /* === Live Camera Feed === */
 .live-feed {
     flex-shrink: 0;
-    width: 280px;
+    width: 480px;
 }
 
 .live-feed-header {
@@ -191,7 +192,7 @@ body {
 .summary-stats {
     display: flex;
     gap: 1rem;
-    margin-top: 1.25rem;
+    margin-top: 0;
 }
 
 .stat-card {

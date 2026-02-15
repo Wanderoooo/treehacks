@@ -2,8 +2,9 @@
 
 import sys
 import os
+import time
 import threading
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import Flask, Response, jsonify, request, send_from_directory, render_template
 from werkzeug.utils import secure_filename
 from pathlib import Path
 import json
@@ -24,6 +25,7 @@ INPUT_DIR = PROJECT_ROOT / "input"
 sys.path.insert(0, str(PROJECT_ROOT))
 from agent import agent_chat, _build_seed_messages
 from src.video_processor import VideoProcessor
+from stream_receiver import get_live_frame, main as stream_receiver_main
 
 # Shared conversation state (single-user; fine for demo)
 _chat_messages = _build_seed_messages()
@@ -114,6 +116,19 @@ def serve_heatmap(filename):
 @app.route("/media/input/<path:filename>")
 def serve_input(filename):
     return send_from_directory(str(INPUT_DIR), filename)
+
+
+@app.route("/api/live")
+def live_feed():
+    """MJPEG stream of the latest frame from the Jetson."""
+    def generate():
+        while True:
+            frame = get_live_frame()
+            if frame is not None:
+                yield (b"--frame\r\n"
+                       b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+            time.sleep(0.033)  # ~30fps cap
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -387,6 +402,16 @@ def chat_reset():
 
 
 if __name__ == "__main__":
+    # Start stream receiver in background thread
+    jetson_ip = sys.argv[1] if len(sys.argv) > 1 else None
+    if jetson_ip:
+        sys.argv = [sys.argv[0], jetson_ip]  # pass IP to stream_receiver
+        stream_thread = threading.Thread(target=stream_receiver_main, daemon=True)
+        stream_thread.start()
+        print(f"[live] Stream receiver started for Jetson at {jetson_ip}")
+    else:
+        print("[live] No Jetson IP provided, live feed disabled. Usage: python web/app.py <JETSON_IP>")
+
     print(f"Bike Safety Dashboard: http://localhost:8081")
     print(f"Output directory: {OUTPUT_DIR}")
-    app.run(debug=True, host="0.0.0.0", port=8081)
+    app.run(debug=False, host="0.0.0.0", port=8081)
